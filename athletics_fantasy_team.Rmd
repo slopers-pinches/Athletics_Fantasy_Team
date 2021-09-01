@@ -1,0 +1,278 @@
+---
+title: "Athletics Fantasy Team"
+author: "Bryan Sam"
+date: "July 15th, 2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+## 1. Athletics needs a new breed of scouts and managers
+
+Athletics goes back to the original Olympics. Since then, little has changed. Athletes compete as individuals, seeking to throw the farthest, jump the farthest (or highest) and run the fastest. But people like cheering for teams, waving banners and yelling like mad during matches, wearing their favorite player's jerseys and staying loyal to their side through thick and thin.
+
+![](NAL_Shield_Blue.png){width="362"}
+
+What if athletics was a team sport? It could potentially be more interesting and would give us a new set of sports analytics to discuss. We might even reduce the incentives to do unsavory things in the pursuit of *altius*, *fortius*, and *citius*.
+
+This dataset contains results from American athletes in the horizontal jumps (triple jump and long jump) and throws (shot put, discus, javelin, hammer and weight). Let's read, analyze, and scout [**women's javelin**]{.ul}.
+
+```{r echo=TRUE, message=FALSE, paged.print=TRUE}
+# Load the tidyverse package
+library(tidyverse)
+
+# Import the full dataset
+data <- read_csv('athletics.csv')
+
+# Select the results of interest: women's javelin
+javelin <- data %>%
+            filter(Event == "Javelin",
+                  Male_Female == "Female") %>%
+            select(-c("Male_Female", "Event"))
+ 
+# Review data 
+head(javelin)
+summary(javelin)
+```
+
+## 2. Tidy the data
+
+The snapshot of the shows each athlete's results at individual track meets. Athletes have six throws, but in these meets only one -- their longest -- actually matters. If all we wanted to do was talk regular track and field, we would have a very easy task: create a new column taking the max of each row, arrange the data frame by that column in descending order and we'd be done.
+
+But the managers need to do and know much more than that! This is a sport of strategy, where every throw matters. Managers need a deeper analysis to choose their teams, craft their plan and make decisions on match-day.
+
+We first need to make this standard "wide" view tidy data. The tidy data will allow us to compute our summary statistics.
+
+```{r}
+# Assign the tidy data to javelin_long
+javelin_long <- javelin %>%
+            gather(-c(1:2), key = "Flight", value = "Distance") %>%
+            mutate(Flight = str_replace(Flight, pattern = "Flight",
+                                        replacement = ""))
+
+# Make Flight a numeric
+javelin_long$Flight <- as.numeric(javelin_long$Flight)
+
+# Examine the first 6 rows
+head(javelin_long)
+```
+
+## 3. Every throw matters
+
+A throw is a foul if the athlete commits a technical violation during the throw. In javelin, the most common foul is stepping over the release line. Traditionally, the throw is scored as an "F" and it has no further significance. Athletes can also choose to pass on a throw -- scored as a "P" -- if they are content with their earlier throws and want to "save themselves" for later.
+
+![](stock-photo-young-black-female-javelin-thrower-.jpg){width="589"}
+
+When we said every throw matters, the goal here is not for each player to have one great throw. All their throws in each event are summed together, and the team with the highest total distance wins the point. Fouls are scored as 0 and passing in which the manager and teammates would not be pleased.
+
+Here, we examine which athletes cover the most distance in each of their meets, along with two ways to talk about their consistency.
+
+```{r message=FALSE, warning=FALSE, paged.print=TRUE}
+# Filter out 0 Distance
+# Find the total distance and standard deviation of Distance by Athlete & EventID
+# Count the number of successes by Athlete & EventID
+javelin_totals <- javelin_long %>%
+                    filter(Distance > 0) %>%
+                    group_by(Athlete, EventID) %>%
+                    summarise(TotalDistance = sum(Distance),
+                             StandardDev = round(sd(Distance), 3),
+                             Success = n())
+
+# View 10 rows of javelin_totals
+javelin_totals[30:40, ]
+```
+
+## 4. Find the clutch performers
+
+In many traditional track meets, after the first three throws the leaders in the field are whittled down to the top eight (sometimes more, sometimes less) athletes. Like the meet overall, this is solely based on their best throw of those first three. 
+
+We give the choice to the managers. Of the three athletes who start each event, the manager chooses the two who will continue on for the last three throws. The manager will need to know which players tend to come alive -- or at least maintain their form -- in the late stages of a match. They also need to know if a player's first three throws are consistent with their playing history. Otherwise, they could make a poor decision about who stays in based only on the sample unfolding in front of them.
+
+For now, let's examine just the top-line stat -- total distance covered -- for differences between early and late stages of the javelin match.
+
+```{r message=FALSE, warning=FALSE, paged.print=TRUE}
+# Find the difference between the first three throws and last three throws by Athlete and EventID
+javelin <- javelin %>%
+            group_by(Athlete, EventID) %>%
+            mutate(Early = sum(Flight1, Flight2, Flight3),
+                  Late = sum(Flight4, Flight5, Flight6),
+                  Diff = Late - Early)
+# Examine the last ten rows
+tail(javelin, 10)
+```
+
+## 5. Pull the pieces together for a new look at the athletes
+
+The aggregate stats are in two data frame. By joining the two together, we can take our first rough look at how the athletes are compared to each other.
+
+```{r paged.print=TRUE}
+# Merge javelin_totals and javelin dataframes
+javelin_totals <- javelin_totals %>%
+                left_join(javelin, by = c("EventID", "Athlete")) %>%
+                select(Athlete, TotalDistance,
+                       StandardDev, Success, Diff) %>%
+                mutate(StandardDev = round(StandardDev, 2),
+                       Diff = round(Diff, 2))
+
+# Examine the first ten rows
+head(javelin_totals, 10)
+```
+
+## 6. Normalize the data to compare across stats
+
+The four summary statistics - total distance, standard deviation, number of successful throws and the measure of early vs. late - are on different scales and measure very different things. Managers need to be able to compare these to each other and then weigh them based on what is most important to their vision and strategy for the team. A simple normalization will allow for these comparisons.
+
+```{r}
+# Create a normalize function
+norm <- function(result) {
+    (result - min(result)) / (max(result) - min(result))
+}
+```
+
+```{r message=FALSE, warning=FALSE, paged.print=TRUE}
+# Agg Stats Column Headers
+aggstats <- c("TotalDistance", "StandardDev", "Success", "Diff")
+
+# Normalize the javelin_totals dataframe
+javelin_norm <- javelin_totals %>%
+                  ungroup() %>%
+                  mutate_at(vars(aggstats), norm) %>%
+                  group_by(Athlete) %>%
+                  summarize_all(mean, na.rm = TRUE) %>%
+                  mutate_if(is.numeric, round,4)
+
+# Review javelin_norm
+#dim(javelin_norm) ## 68 rows & 5 columns
+head(javelin_norm)
+```
+
+## 7. What matters most when building the squad?
+
+Managers have to decide what kind of players they want on their team - who matches their vision, who has the skills they need to play their style of athletics and - ultimately - who will deliver the wins. A risk-averse manager will want players who rarely foul. The steely-eyed manager will want the players who can deliver the win with their final throws.
+
+Like any other sport (or profession), rarely will any one player be equally strong in all areas. Managers have to make trade-offs in selecting their teams. The first batch of managers have the added disadvantage of selecting players based on data from a related but distinct sport. The data comes from traditional track and field meets, where the motivations and goals are much different than our own.
+
+This is why managers make the big money and get fired when results go south.
+
+![](coach.jpg){width="485"}
+
+```{r}
+# Choose the weights to select players to be part of the squad
+weights <- c(4, 1, 3, 2)
+
+# Calculate a total score for each athlete
+# Select the top 5 athletes
+javelin_team <- javelin_norm %>%
+                  mutate(TotalScore = round(
+                    (TotalDistance * weights[1]) +
+                    (StandardDev * weights[2]) +
+                    (Success * weights[3]) + 
+                    (Diff * weights[4]), 2)
+                    ) %>%
+                  # Descending order
+                  arrange(desc(TotalScore)) %>%
+                  # Select Athlete & TotalScore
+                  select(Athlete, TotalScore) %>%
+                  # Top 5
+                  slice(1:5)
+
+javelin_team
+```
+
+## 8. Get to know your players
+
+The data has spoken! Now we have our five javelin throwers, but we still don't really know them. The `javelin_totals` data frame has the data that went into the decision process earlier, so we will account that. This gives us an idea of what they each bring to the team.
+
+We can also take a look at how they compare to the pool of athletes we started from by taking the mean and maximum of each statistic.
+
+```{r paged.print=TRUE}
+# Create a team_stats dataframe of players' avg stats from javeline_totals dataframe
+team_stats <- javelin_totals %>% 
+                # Filter for the selected top 5 athletes
+                filter(Athlete %in% javelin_team$Athlete) %>%
+                # Find the avg
+                summarize_all(mean, na.rm = TRUE) %>%
+                mutate_if(is.numeric, round, 2)
+
+# Examine team_stats
+team_stats
+```
+
+```{r}
+# Create the pool_stats dataframe of max and avg values for each stats acrosse the entire pool of athletes
+
+# pool_stats dataframe
+pool_stats <- data.frame(do.call('cbind', 
+            sapply(javelin_totals,
+              # Find the max and avg for each stats
+              function(x) if(is.numeric(x)) c(max(x), mean(x)))))
+
+# Create a column for pool_stats
+pool_stats$MaxAvg <- c("Maximum", "Average")
+
+# Long format
+pool_stats <- pool_stats %>%
+                gather(key="Statistic", 
+                       value="Aggregate", -MaxAvg) %>%
+                mutate(Aggregate = round(Aggregate,2))
+
+# Examine pool_stats
+pool_stats
+```
+
+## 9. Make the case to the front office
+
+The manager knows what she wants out of the team and has the data to support her choices, but she still needs to defend her decisions to the team owners. They do write the checks, after all.
+
+The owners are busy people. Many of them work other jobs and own other companies. They trust their managers, so as long the manager can give them an easy-to-digest visual presentation of why they should sign these five athletes out of all the others, they will approve. A series of plots showing how each athlete compares to the maximum and the average of each statistic will be enough for them.
+
+```{r}
+# Create a 2x2 grid to show different aggregate stats
+# Each bar of the plot represent each athlete on the squad and line showing the max and avg values from pool_stats
+p <- team_stats %>%
+        # Long format
+        gather(-Athlete, key = "Statistic", value = "Aggregate") %>%
+        # Bar plot
+        ggplot(aes(x = Athlete, y = Aggregate, fill = Athlete)) +
+        geom_bar(stat = "identity") +
+        facet_wrap(~Statistic, scales = "free_y") +
+        geom_hline(data=pool_stats, 
+                   aes(yintercept=Aggregate, 
+                       group=Statistic, color=MaxAvg), size=1) +
+        labs(title="Grand Rapids Athletic Club: Women's Javelin",
+             color="Athlete pool maximum / average") +
+        scale_fill_hue(l=70) +
+        scale_color_hue(l=20) +
+      theme_minimal() +
+      theme(axis.text.x=element_blank(),
+            axis.title.x=element_blank(),
+            axis.title.y=element_blank())
+# Plot
+p
+```
+
+## 10. Time to throw down
+
+Before the athletics season opens, the manager will perform similar analyses for the other throws, the jumps, and running events. Then, we'll game out different permutations of the team and opponent to come up with the best lineup and make the best decisions on match day. For now, since it's what we know best and we're almost out of time, let's simulate a simple javelin match.
+
+The winner is the team that throws the highest combined distance: six throws from each of our three players against six throws from each of the opponent's three players.
+
+Our team selections are **Maggie Malone**, **Alicia DeShasier,** and **Dominique Ouellette.**
+
+```{r}
+# Select 3 players from the top 5 shortlist who should compete
+home <- c(5, 1, 2)
+# Randomly select 3 players for the away team
+away <- sample(1:nrow(javelin_totals), 3, replace=FALSE)
+
+# Simulation
+HomeTeam <- round(sum(team_stats$TotalDistance[home]),2)
+AwayTeam <- round(sum(javelin_totals$TotalDistance[away]),2)
+
+# Print Result
+print(paste0("Javelin match, Final Score: ", HomeTeam, " - ",
+             AwayTeam))
+ifelse(HomeTeam > AwayTeam, print("Win!"), print("Sometimes you just have to take the L."))
+```
+
+In this simulation example, the team selection we chose won against a randomized opponent.
